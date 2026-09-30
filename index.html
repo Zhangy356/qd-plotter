@@ -278,7 +278,7 @@ const resistivityCalc = [timeCalc, ...[1, 2, 3].flatMap(n => {
       f: (c, v) => perRow(c[R], r => r / v[`R${n}`]) },
   ];
 })];
-const formulaInputs = [{ key: 'formula', label: 'formula', text: true, placeholder: 'e.g. Fe2O3' }, { key: 'mass', label: 'mass (mg)' }];
+const formulaInputs = [{ key: 'formula', label: 'formula', text: true, placeholder: 'e.g. YBa2Cu3O6.95' }, { key: 'mass', label: 'mass (mg)' }];
 const HC = 'Samp HC (µJ/K)', HC_T = 'Sample Temp (Kelvin)';
 // molar C (J/mol/K) = C (µJ/K) · M (g/mol) / (mass (mg) · 1e3)
 const molarC = (c, v) => perRow(c[HC], C => C * v.formula / (v.mass * 1e3));
