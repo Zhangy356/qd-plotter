@@ -1,0 +1,854 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QD Data Plotter</title>
+<link rel="stylesheet" href="vendor/fonts/fonts.css">
+<style>
+/* Layout: control rail on the left (stacks on top at phone width), stacked shared-x plot fills the rest. */
+:root {
+  --bg: #f3f5f7;
+  --panel: #ffffff;
+  --fg: #16202a;
+  --muted: #5d6b78;
+  --line: #d7dee5;
+  --accent: #1f6fb2;
+  --accent-soft: #e3eef8;
+  --danger: #b3413a;
+  --grid: #e6ebf0;
+  --plotgrid: #d4d4d4; /* light grey major-tick grid */
+  --font-ui: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-data: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1419; --panel: #171e25; --fg: #e3e9ef; --muted: #8d9aa6; --line: #2a343e;
+    --accent: #5ea8e6; --accent-soft: #1b2d3d; --danger: #e07a72; --grid: #232c35; --plotgrid: #3d454e; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1419; --panel: #171e25; --fg: #e3e9ef; --muted: #8d9aa6; --line: #2a343e;
+  --accent: #5ea8e6; --accent-soft: #1b2d3d; --danger: #e07a72; --grid: #232c35; --plotgrid: #3d454e; color-scheme: dark;
+}
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-ui); font-size: 14px; }
+.app { display: grid; grid-template-columns: 300px minmax(0, 1fr) 320px; gap: 16px; padding: 16px; min-height: 100%; box-sizing: border-box; }
+.rail { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.main { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+h1 { font-size: 18px; font-weight: 700; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+.sub { color: var(--muted); font-size: 12.5px; margin: 2px 0 0; }
+.box { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); }
+.drop { border: 1.5px dashed var(--line); border-radius: 6px; padding: 12px; text-align: center; color: var(--muted); cursor: pointer; font-size: 13px; }
+.drop.over, .drop:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--fg); }
+.drop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fileinfo { font-family: var(--font-data); font-size: 12px; line-height: 1.5; word-break: break-all; font-variant-numeric: tabular-nums; }
+.fileinfo .tag { display: inline-block; font-family: var(--font-ui); font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); margin-bottom: 4px; }
+.err { color: var(--danger); font-size: 13px; }
+select, button { font: inherit; color: var(--fg); }
+select { width: 100%; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 5px 6px; font-size: 13px; }
+select:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button { background: transparent; border: 1px solid var(--line); border-radius: 5px; padding: 5px 10px; cursor: pointer; font-size: 13px; }
+button:hover { border-color: var(--accent); color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--panel); font-weight: 600; }
+button.primary:hover { filter: brightness(1.08); color: var(--panel); }
+button.icon { padding: 3px 8px; line-height: 1; color: var(--muted); }
+button.icon:hover { color: var(--danger); border-color: var(--danger); }
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.panel-head strong { font-size: 13px; }
+.curve { display: grid; grid-template-columns: var(--lw) minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.curve .rowlabel { display: flex; align-items: center; gap: 4px; white-space: nowrap; font-size: 12px; color: var(--muted); }
+.swatch { display: inline-block; flex: none; width: 12px; height: 12px; border-radius: 3px; }
+/* click-to-cycle swatches: color (before a curve's label) and plot style (before y data) */
+button.swatch { padding: 0; border: 1px solid var(--line); cursor: pointer; width: 16px; height: 16px; box-sizing: border-box; border-radius: 3px; }
+button.swatch:hover { border-color: var(--accent); }
+button.style-sw { background: transparent; display: inline-flex; align-items: center; justify-content: center; } /* same size as the color square */
+button.style-sw svg { display: block; }
+.panels { display: flex; flex-direction: column; gap: 10px; }
+#plot { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; flex: 1; min-height: 480px; }
+.hint { color: var(--muted); font-size: 12px; }
+/* compact settings rows: label on the left, input on the right */
+.right { --lw: 60px; }
+.field { display: grid; grid-template-columns: var(--lw, 72px) minmax(0, 1fr); gap: 8px; align-items: center; font-size: 12px; color: var(--muted); min-width: 0; }
+/* two inputs in a row: equal label widths, equal input widths, equal gaps; first input lines up with single rows */
+.right .pair, .filter .pair { grid-template-columns: var(--lw) minmax(0, 1fr) var(--lw) minmax(0, 1fr); }
+.right .pair .field, .filter .pair .field { display: contents; }
+.filter { --lw: 28px; }
+.filter strong { font-size: 13px; }
+.filter .cond { display: flex; flex-direction: column; gap: 6px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.filter .cond-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.filter .count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.field span { white-space: pre-line; line-height: 1.15; }
+.field select { width: 100%; }
+.field span { display: flex; align-items: center; gap: 6px; }
+.field input { font: inherit; font-size: 13px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 5px 6px; min-width: 0; width: 100%; box-sizing: border-box; }
+.field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+dialog { background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 10px; padding: 18px; width: min(460px, calc(100vw - 32px)); box-sizing: border-box; }
+dialog::backdrop { background: rgba(10, 16, 22, 0.45); }
+dialog h2 { font-size: 16px; margin: 0 0 4px; }
+dialog form { display: flex; flex-direction: column; gap: 10px; }
+.cols { display: flex; flex-direction: column; gap: 4px; max-height: 50vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+.cols label { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+.cols .group { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-top: 6px; }
+.cols .group:first-child { margin-top: 0; }
+.pick-actions, .dlg-foot { display: flex; gap: 8px; flex-wrap: wrap; }
+.dlg-foot { justify-content: flex-end; }
+.checks { display: flex; gap: 16px; flex-wrap: wrap; }
+.check { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+.check input { accent-color: var(--accent); margin: 0; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.right .box strong { font-size: 13px; }
+.sample { --lw: 92px; }
+@media (min-width: 1151px) { .sample { --lw: 128px; } .sample .field span { white-space: nowrap; } }
+.sample strong { font-size: 13px; }
+.sample .sub-head { font-size: 12px; font-weight: 600; margin-top: 2px; }
+.sample .result { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sample .result.bad { color: var(--danger); }
+@media (max-width: 1150px) {
+  .app { grid-template-columns: 250px minmax(0, 1fr); }
+  .right { grid-column: 2; }
+}
+@media (max-width: 760px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .right { grid-column: auto; }
+  #plot { min-height: 420px; }
+}
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <aside class="rail">
+    <div>
+      <h1>QD Data Plotter</h1>
+      <p class="sub">DynaCool / PPMS resistivity, heat capacity and MPMS3 (.dat)</p>
+    </div>
+
+    <div class="box">
+      <span class="label">Data file</span>
+      <div id="drop" class="drop" tabindex="0" role="button">Drop a .dat file here or click to choose</div>
+      <input id="file" type="file" accept=".dat,.txt,.csv" hidden>
+      <div id="fileinfo" class="fileinfo"></div>
+      <div id="err" class="err" hidden></div>
+      <button id="exportBtn" hidden>Export CSV…</button>
+      <div id="exportStatus" class="hint" role="status" hidden></div>
+    </div>
+
+    <div id="filterBox" class="box filter" hidden></div>
+
+    <div id="sampleBox" class="box sample" hidden></div>
+
+    <p class="hint">Drag on the plot to zoom, double-click to reset. Drag a curve label to move it.</p>
+  </aside>
+
+  <main class="main">
+    <div id="plot"></div>
+  </main>
+
+  <aside class="rail right">
+    <span class="label">Figure settings</span>
+    <div id="settings" class="panels"><p class="hint">Load a .dat file to set up the figure.</p></div>
+  </aside>
+</div>
+
+<dialog id="exportDlg" aria-labelledby="exportTitle">
+  <form id="exportForm" method="dialog">
+    <h2 id="exportTitle">Export CSV</h2>
+    <p class="hint">Choose the columns to save. Rows keep the order of the .dat file.</p>
+    <p class="hint" id="exportFilterNote" hidden></p>
+    <div class="pick-actions"><button type="button" id="pickMain">Key columns</button><button type="button" id="pickAll">All</button><button type="button" id="pickNone">None</button></div>
+    <div id="exportCols" class="cols"></div>
+    <div id="exportMsg" class="err" hidden></div>
+    <div class="dlg-foot"><button type="button" id="exportCancel">Cancel</button><button type="submit" class="primary" id="exportGo">Export</button></div>
+  </form>
+</dialog>
+
+<script src="vendor/plotly-2.35.2.min.js"></script>
+<script>
+// ---------- Parsing: any Quantum Design .dat file ([Header] ... [Data] + CSV table) ----------
+function splitCSV(line) {
+  const out = []; let cur = '', q = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (q) { if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += c; }
+    else if (c === '"') q = true;
+    else if (c === ',') { out.push(cur); cur = ''; }
+    else cur += c;
+  }
+  out.push(cur);
+  return out.map(s => s.trim());
+}
+
+function parseQD(text) {
+  const lines = text.split(/\r?\n/);
+  const dataIdx = lines.findIndex(l => l.trim() === '[Data]');
+  if (dataIdx < 0) throw new Error('No [Data] section found. Is this a Quantum Design .dat file?');
+  const header = lines.slice(0, dataIdx).filter(l => l.trim() && l.trim() !== '[Header]');
+  const names = splitCSV(lines[dataIdx + 1] || '');
+  const cols = {}; names.forEach(n => cols[n] = []);
+  for (let i = dataIdx + 2; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    const cells = splitCSV(lines[i]);
+    names.forEach((n, j) => {
+      const v = cells[j];
+      cols[n].push(v === undefined || v === '' ? null : Number(v));
+    });
+  }
+  // Keep only columns that hold at least one number
+  const columns = names.filter(n => cols[n].some(v => v !== null && !isNaN(v)));
+  const app = (header.find(l => l.startsWith('BYAPP')) || '').split(',').slice(1).map(s => s.trim())[0] || '';
+  return { header, app, columns, cols, nRows: cols[names[0]].length };
+}
+
+// ---------- Data types: add new Quantum Design measurement types here ----------
+
+// ---------- Molar mass from a chemical formula ----------
+// Standard atomic weights (IUPAC, abridged); mass number of the longest-lived isotope for elements without one
+const ATOMIC_MASS = {
+  H: 1.008, D: 2.014, He: 4.0026, Li: 6.94, Be: 9.0122, B: 10.81, C: 12.011, N: 14.007, O: 15.999, F: 18.998, Ne: 20.180,
+  Na: 22.990, Mg: 24.305, Al: 26.982, Si: 28.085, P: 30.974, S: 32.06, Cl: 35.45, Ar: 39.948, K: 39.098, Ca: 40.078,
+  Sc: 44.956, Ti: 47.867, V: 50.942, Cr: 51.996, Mn: 54.938, Fe: 55.845, Co: 58.933, Ni: 58.693, Cu: 63.546, Zn: 65.38,
+  Ga: 69.723, Ge: 72.630, As: 74.922, Se: 78.971, Br: 79.904, Kr: 83.798, Rb: 85.468, Sr: 87.62, Y: 88.906, Zr: 91.224,
+  Nb: 92.906, Mo: 95.95, Tc: 98, Ru: 101.07, Rh: 102.91, Pd: 106.42, Ag: 107.87, Cd: 112.41, In: 114.82, Sn: 118.71,
+  Sb: 121.76, Te: 127.60, I: 126.90, Xe: 131.29, Cs: 132.91, Ba: 137.33, La: 138.91, Ce: 140.12, Pr: 140.91, Nd: 144.24,
+  Pm: 145, Sm: 150.36, Eu: 151.96, Gd: 157.25, Tb: 158.93, Dy: 162.50, Ho: 164.93, Er: 167.26, Tm: 168.93, Yb: 173.05,
+  Lu: 174.97, Hf: 178.49, Ta: 180.95, W: 183.84, Re: 186.21, Os: 190.23, Ir: 192.22, Pt: 195.08, Au: 196.97, Hg: 200.59,
+  Tl: 204.38, Pb: 207.2, Bi: 208.98, Po: 209, At: 210, Rn: 222, Fr: 223, Ra: 226, Ac: 227, Th: 232.04, Pa: 231.04,
+  U: 238.03, Np: 237, Pu: 244, Am: 243, Cm: 247, Bk: 247, Cf: 251, Es: 252, Fm: 257,
+};
+// Handles counts with decimals (La1.8Sr0.2CuO4), (), [] and hydrates after · * or . (CuSO4·5H2O).
+// A "." between two digits is a decimal point, so write a hydrate as CuSO4·5H2O, not CuSO4.5H2O.
+function molarMass(formula) {
+  const f = formula.replace(/\s+/g, '');
+  let i = 0;
+  const num = () => { const m = /^\d+(\.\d+)?|^\.\d+/.exec(f.slice(i)); if (!m) return null; i += m[0].length; return +m[0]; };
+  const group = close => {
+    let sum = 0, any = false;
+    while (i < f.length && f[i] !== close && !'·*•.'.includes(f[i])) {
+      let m;
+      if (f[i] === '(' || f[i] === '[') {
+        const end = f[i] === '(' ? ')' : ']'; i++;
+        m = group(end);
+        if (f[i] !== end) throw new Error(`missing "${end}"`);
+        i++;
+      } else {
+        const e = /^[A-Z][a-z]?/.exec(f.slice(i));
+        if (!e) throw new Error(`unexpected "${f[i]}"`);
+        const sym = e[0];
+        if (!(sym in ATOMIC_MASS)) throw new Error(`unknown element "${sym}"`);
+        i += sym.length; m = ATOMIC_MASS[sym];
+      }
+      const n = num(); sum += m * (n === null ? 1 : n); any = true;
+    }
+    if (!any) throw new Error('empty part');
+    return sum;
+  };
+  let total = 0;
+  while (i < f.length) {
+    const k = num(); // hydrate count, e.g. the 5 in ·5H2O
+    total += (k === null ? 1 : k) * group(null);
+    if (i < f.length) { if (!'·*•.'.includes(f[i])) throw new Error(`unexpected "${f[i]}"`); i++; }
+  }
+  return total;
+}
+
+// ---------- Calculated columns ----------
+// Each input: { key, label, group, unit }; each calc: { name, label, needs: [input keys], f: (cols, v) => value per row }.
+// A calc column is empty (no points) until all of its inputs are filled with positive numbers.
+const pos = v => { const n = parseFloat(v); return n > 0 ? n : null; };
+const perRow = (a, fn) => a.map(r => r === null ? null : fn(r));
+// Time Stamp -> Time (min) counted from the first data point (MultiVu names the stamp column differently per option)
+const STAMPS = ['Time Stamp (sec)', 'Time Stamp (Seconds)'];
+const timeCalc = { name: 'Time (min)', label: 't (min)', src: STAMPS, needs: [],
+  f: c => { const t = c[STAMPS.find(n => c[n])], t0 = t.find(v => v !== null);
+    return perRow(t, v => Math.round((v - t0) / 60 * 1e6) / 1e6); } }; // rounded to remove float noise
+const resistivityInputs = [1, 2, 3].flatMap(n => [
+  { key: `L${n}`, sample: n, label: 'length (cm)' },
+  { key: `A${n}`, sample: n, label: 'cross section (cm²)' },
+  { key: `R${n}`, sample: n, label: 'RT resistance (Ω)' },
+]);
+const resistivityCalc = [timeCalc, ...[1, 2, 3].flatMap(n => {
+  const R = `Bridge ${n} Resistance (Ohms)`;
+  return [
+    { name: `Sample ${n} Resistivity (Ω·cm)`, label: 'ρ (Ω·cm)', src: R, needs: [`L${n}`, `A${n}`],
+      f: (c, v) => perRow(c[R], r => r * v[`A${n}`] / v[`L${n}`]) }, // ρ = R · A / L
+    { name: `Sample ${n} R/R(300K)`, label: 'R/R(300K)', src: R, needs: [`R${n}`],
+      f: (c, v) => perRow(c[R], r => r / v[`R${n}`]) },
+  ];
+})];
+const formulaInputs = [{ key: 'formula', label: 'formula', text: true, placeholder: 'e.g. Fe2O3' }, { key: 'mass', label: 'mass (mg)' }];
+const HC = 'Samp HC (µJ/K)', HC_T = 'Sample Temp (Kelvin)';
+// molar C (J/mol/K) = C (µJ/K) · M (g/mol) / (mass (mg) · 1e3)
+const molarC = (c, v) => perRow(c[HC], C => C * v.formula / (v.mass * 1e3));
+const hcCalc = [
+  timeCalc,
+  { name: 'Molar heat capacity (J·mol^-1·K^-1)', label: 'C (J·mol^-1·K^-1)', src: HC, needs: ['formula', 'mass'], f: molarC },
+  { name: 'C/T (J·mol^-1·K^-2)', label: 'C/T (J·mol^-1·K^-2)', src: HC, needs: ['formula', 'mass'],
+    f: (c, v) => molarC(c, v).map((C, i) => C === null || !c[HC_T][i] ? null : C / c[HC_T][i]) },
+  { name: 'T^2 (K^2)', label: 'T^2 (K^2)', src: HC_T, needs: [], f: c => perRow(c[HC_T], T => T * T) },
+];
+const MOMENTS = [['VSM Moment', 'Moment (emu)'], ['DC Moment Fixed', 'DC Moment Fixed Ctr (emu)'], ['DC Moment Free', 'DC Moment Free Ctr (emu)']];
+const mpmsCalc = [
+  timeCalc,
+  { name: 'Inverse temperature T^-1 (K^-1)', label: '1/T (K^-1)', src: 'Temperature (K)', needs: [],
+    f: c => perRow(c['Temperature (K)'], t => t === 0 ? null : 1 / t) },
+  ...MOMENTS.map(([what, col]) => ({
+    name: `Susceptibility from ${what} (emu·mol^-1·Oe^-1)`, label: 'χ (emu·mol^-1·Oe^-1)', src: col, needs: ['formula', 'mass'],
+    // χ = moment · molar mass / (mass in g) / H; points at H = 0 are left out
+    f: (c, v) => c[col].map((m, i) => { const H = c['Magnetic Field (Oe)'][i];
+      return m === null || !H ? null : m * v.formula / (v.mass / 1000) / H; }),
+  })),
+];
+
+// Each type: how to recognise the file, key columns (listed first, pre-checked for export),
+// short default axis labels per column,
+// and the default x and y columns (y: the first one present in the file is used)
+const DATA_TYPES = {
+  resistivity: {
+    name: 'Resistivity',
+    detect: d => d.app === 'Resistivity' || d.columns.includes('Bridge 1 Resistance (Ohms)'),
+    main: ['Temperature (K)', 'Magnetic Field (Oe)',
+      'Bridge 1 Resistance (Ohms)', 'Bridge 2 Resistance (Ohms)', 'Bridge 3 Resistance (Ohms)'],
+    labels: { 'Temperature (K)': 'T (K)', 'Magnetic Field (Oe)': 'H (Oe)',
+      'Bridge 1 Resistance (Ohms)': 'R(Ω)', 'Bridge 2 Resistance (Ohms)': 'R(Ω)', 'Bridge 3 Resistance (Ohms)': 'R(Ω)' },
+    defaultX: 'Temperature (K)',
+    defaultY: ['Bridge 1 Resistance (Ohms)'],
+    inputs: resistivityInputs, calc: resistivityCalc,
+  },
+  mpms3: {
+    name: 'MPMS3',
+    detect: d => d.app.startsWith('MPMS3') || d.columns.includes('DC Moment Free Ctr (emu)'),
+    main: ['Temperature (K)', 'Magnetic Field (Oe)', 'Moment (emu)',
+      "AC X' (emu/Oe)", "AC X'' (emu/Oe)", 'DC Moment Fixed Ctr (emu)', 'DC Moment Free Ctr (emu)'],
+    labels: { 'Temperature (K)': 'T (K)', 'Magnetic Field (Oe)': 'H (Oe)', 'Moment (emu)': 'M (emu)',
+      "AC X' (emu/Oe)": "χ' (emu/Oe)", "AC X'' (emu/Oe)": "χ'' (emu/Oe)",
+      'DC Moment Fixed Ctr (emu)': 'M (emu)', 'DC Moment Free Ctr (emu)': 'M (emu)' },
+    defaultX: 'Temperature (K)',
+    defaultY: ['Moment (emu)', 'DC Moment Fixed Ctr (emu)', 'DC Moment Free Ctr (emu)', "AC X' (emu/Oe)"],
+    inputs: formulaInputs,
+    calc: mpmsCalc,
+  },
+  heatCapacity: {
+    name: 'Heat capacity',
+    detect: d => d.app === 'HeatCapacity' || d.columns.includes('Samp HC (µJ/K)'),
+    main: ['Field (Oersted)', 'Sample Temp (Kelvin)', 'Samp HC (µJ/K)'],
+    labels: { 'Sample Temp (Kelvin)': 'T (K)', 'Field (Oersted)': 'H (Oe)', 'Samp HC (µJ/K)': 'C (µJ/K)' },
+    temp: 'Sample Temp (Kelvin)',
+    defaultX: 'Sample Temp (Kelvin)',
+    defaultY: ['Samp HC (µJ/K)'],
+    inputs: formulaInputs, calc: hcCalc,
+    mode: 'markers', // separate relaxation measurements, not taken in temperature order: joining them with lines draws stray jumps
+  },
+};
+
+// ---------- App state ----------
+// Curve colors; clicking a curve's color square steps through them in this order
+const COLORS = ['#515151', '#f14040', '#1a6fdf', '#008000', '#7d2db9']; // Yu's scheme: gray, red, blue, green, purple
+const COLOR_NAMES = ['gray', 'red', 'blue', 'green', 'purple'];
+// Plot styles; clicking the square before "y data" steps through them
+const STYLES = ['lines+markers', 'markers', 'lines'];
+const STYLE_NAMES = { 'lines+markers': 'symbol + line', markers: 'symbol only', lines: 'line only' };
+const cycle = (list, v) => list[(list.indexOf(v) + 1) % list.length];
+let data = null, type = null, x = null;
+let panels = []; // each panel: { curves: [{ col, color, label, lx, ly }], yLabel, yMin, yMax, yLog, yGrid }
+let settings = { title: '', xLabel: '', xMin: '', xMax: '', xLog: false, xGrid: false, titleSize: 20, tickSize: 20 };
+// A new curve takes the color after the subplot's last curve; labels start empty (none drawn)
+const newCurve = (col, prev) => ({ col, color: prev ? cycle(COLORS, prev.color) : COLORS[0], style: type.mode || 'lines+markers', label: '' });
+const sampleInputs = {}; // typed sample values per data type, kept when another file of the same type is loaded
+const filterState = {}; // filter conditions per data type: [{ col, min, max }], kept like the sample values
+const newPanel = col => ({ curves: [newCurve(col)], yLabel: '', yMin: '', yMax: '', yLog: false, yGrid: false });
+
+const $ = id => document.getElementById(id);
+const defaultY = () => type.defaultY.find(c => data.columns.includes(c)) || data.columns[1];
+
+function loadText(text, fileNameArg) {
+  $('err').hidden = true;
+  let d;
+  try { d = parseQD(text); } catch (e) { $('err').textContent = e.message; $('err').hidden = false; return; }
+  const t = Object.values(DATA_TYPES).find(dt => dt.detect(d));
+  if (!t) { $('err').textContent = 'This file type is not supported yet. Supported now: DynaCool/PPMS resistivity, heat capacity and MPMS3.'; $('err').hidden = false; return; }
+  // Calculated columns whose source column is in this file; listed after the file's own columns
+  d.calc = (t.calc || []).filter(c => [].concat(c.src).some(n => d.columns.includes(n)));
+  d.calc.forEach(c => d.columns.push(c.name));
+  data = d; type = t;
+  computeCalc(); fileName = fileNameArg;
+  x = d.columns.includes(t.defaultX) ? t.defaultX : d.columns[0];
+  panels = [newPanel(defaultY())];
+  const T = (d.cols[t.temp || 'Temperature (K)'] || []).filter(v => v !== null);
+  $('fileinfo').innerHTML = '';
+  const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = t.name;
+  const name = document.createElement('div'); name.textContent = fileNameArg;
+  const meta = document.createElement('div');
+  meta.textContent = `${d.nRows} points` + (T.length ? ` · ${Math.min(...T).toFixed(2)}–${Math.max(...T).toFixed(2)} K` : '');
+  $('fileinfo').append(tag, name, meta);
+  $('exportBtn').hidden = false;
+  renderFilter();
+  renderSample();
+  render();
+}
+
+// Values from the sample panel, as numbers (formula -> molar mass in g/mol); null when missing or invalid
+function sampleValues() {
+  const raw = sampleInputs[type.name] || {}, v = {};
+  (type.inputs || []).forEach(inp => {
+    if (inp.key === 'formula') { try { v.formula = raw.formula ? molarMass(raw.formula) : null; } catch (e) { v.formula = null; } }
+    else v[inp.key] = pos(raw[inp.key]);
+  });
+  return v;
+}
+function computeCalc() {
+  const v = sampleValues();
+  data.calc.forEach(c => {
+    data.cols[c.name] = c.needs.every(k => v[k]) ? c.f(data.cols, v) : new Array(data.nRows).fill(null);
+  });
+  computeMask(); // calculated values may be filtered on
+}
+
+// ---------- Filter: rows pass when every condition holds (AND); min and max are inclusive, a blank bound is open ----------
+const activeConds = () => (filterState[type.name] || []).filter(f => data.columns.includes(f.col) && (f.min !== '' || f.max !== ''));
+function computeMask() {
+  const conds = activeConds();
+  data.mask = null;
+  if (conds.length) {
+    data.mask = new Uint8Array(data.nRows);
+    for (let i = 0; i < data.nRows; i++) {
+      data.mask[i] = conds.every(f => { const v = data.cols[f.col][i];
+        return v !== null && !isNaN(v) && (f.min === '' || v >= +f.min) && (f.max === '' || v <= +f.max); }) ? 1 : 0;
+    }
+  }
+  const el = $('filterCount');
+  if (el) el.textContent = data.mask ? `${data.mask.reduce((a, b) => a + b, 0)} of ${data.nRows} rows pass` : `No active condition: all ${data.nRows} rows`;
+}
+// A column as plotted: rows the filter removes become gaps
+const view = col => data.mask ? data.cols[col].map((v, i) => data.mask[i] ? v : null) : data.cols[col];
+
+function renderFilter() {
+  const box = $('filterBox'); box.innerHTML = ''; box.hidden = false;
+  const conds = filterState[type.name] = (filterState[type.name] || []).filter(f => data.columns.includes(f.col));
+  box.append(Object.assign(document.createElement('strong'), { textContent: 'Filter data' }));
+  conds.forEach((f, fi) => {
+    const el = document.createElement('div'); el.className = 'cond';
+    const head = document.createElement('div'); head.className = 'cond-head';
+    const s = colSelect(f.col, v => { f.col = v; computeMask(); draw(); }); s.id = `filter-col-${fi}`;
+    const rm = Object.assign(document.createElement('button'), { className: 'icon', textContent: '×', title: 'Remove condition' });
+    rm.setAttribute('aria-label', 'Remove condition');
+    rm.onclick = () => { conds.splice(fi, 1); computeMask(); renderFilter(); draw(); };
+    head.append(s, rm);
+    const pair = document.createElement('div'); pair.className = 'pair';
+    pair.append(field('min', `filter-min-${fi}`, f.min, 'none', v => { f.min = v.trim(); computeMask(); }, 'number'),
+                field('max', `filter-max-${fi}`, f.max, 'none', v => { f.max = v.trim(); computeMask(); }, 'number'));
+    el.append(head, pair);
+    box.append(el);
+  });
+  const add = Object.assign(document.createElement('button'), { id: 'addFilter', textContent: '+ Add condition' });
+  add.onclick = () => { conds.push({ col: data.columns.includes('Time (min)') ? 'Time (min)' : x, min: '', max: '' }); renderFilter(); };
+  const count = Object.assign(document.createElement('div'), { className: 'count', id: 'filterCount', role: 'status' });
+  box.append(add, count);
+  computeMask();
+}
+
+// Left panel with the sample inputs the calculated columns need
+function renderSample() {
+  const box = $('sampleBox'); box.innerHTML = '';
+  const inputs = (type.inputs || []).filter(inp => !inp.sample || data.calc.some(c => c.needs.includes(inp.key)));
+  box.hidden = !inputs.length;
+  if (!inputs.length) return;
+  const raw = sampleInputs[type.name] = sampleInputs[type.name] || {};
+  box.append(Object.assign(document.createElement('strong'), { textContent: 'Sample inputs' }));
+  let lastSample = null, mmLine = null;
+  const showMolarMass = () => {
+    if (!mmLine) return;
+    mmLine.classList.remove('bad');
+    if (!raw.formula) { mmLine.textContent = 'molar mass: enter a formula'; return; }
+    try { mmLine.textContent = `molar mass: ${molarMass(raw.formula).toFixed(3)} g/mol`; }
+    catch (e) { mmLine.textContent = `formula: ${e.message}`; mmLine.classList.add('bad'); }
+  };
+  inputs.forEach(inp => {
+    if (inp.sample && inp.sample !== lastSample) {
+      box.append(Object.assign(document.createElement('div'), { className: 'sub-head', textContent: `Sample ${inp.sample}` }));
+      lastSample = inp.sample;
+    }
+    box.append(field(inp.label, `in-${inp.key}`, raw[inp.key] || '', inp.placeholder || '',
+      val => { raw[inp.key] = val.trim(); if (inp.key === 'formula') showMolarMass(); computeCalc(); }, inp.text ? 'text' : 'number'));
+    if (inp.key === 'formula') { mmLine = Object.assign(document.createElement('div'), { className: 'result', id: 'molarMass' }); box.append(mmLine); showMolarMass(); }
+  });
+}
+
+// Column dropdown: main columns first, the rest under "Other columns"
+function colSelect(value, onChange) {
+  const s = document.createElement('select');
+  const main = type.main.filter(c => data.columns.includes(c));
+  const calc = data.calc.map(c => c.name);
+  const other = data.columns.filter(c => !main.includes(c) && !calc.includes(c));
+  const add = (parent, c) => { const o = document.createElement('option'); o.value = o.textContent = c; parent.append(o); };
+  main.forEach(c => add(s, c));
+  if (calc.length) { const g = document.createElement('optgroup'); g.label = 'Calculated'; calc.forEach(c => add(g, c)); s.append(g); }
+  if (other.length) { const g = document.createElement('optgroup'); g.label = 'Other columns'; other.forEach(c => add(g, c)); s.append(g); }
+  s.value = value;
+  s.onchange = () => onChange(s.value);
+  return s;
+}
+
+// Text or number field for the settings panel; typing redraws the plot
+function field(labelText, id, value, placeholder, onInput, kind = 'text') {
+  const wrap = document.createElement('label'); wrap.className = 'field';
+  const span = document.createElement('span'); span.textContent = labelText;
+  const inp = document.createElement('input'); inp.type = kind; inp.id = id; inp.value = value; inp.placeholder = placeholder;
+  inp.oninput = () => { onInput(inp.value); draw(); };
+  wrap.append(span, inp);
+  return wrap;
+}
+function rangeRow(idBase, obj, axisName) {
+  const row = document.createElement('div'); row.className = 'pair';
+  row.append(field(axisName + ' min', idBase + '-min', obj.min, 'auto', v => obj.set('Min', v), 'number'),
+             field(axisName + ' max', idBase + '-max', obj.max, 'auto', v => obj.set('Max', v), 'number'));
+  return row;
+}
+
+function checkbox(labelText, id, checked, onChange) {
+  const wrap = document.createElement('label'); wrap.className = 'check';
+  const cb = Object.assign(document.createElement('input'), { type: 'checkbox', id, checked });
+  cb.onchange = () => { onChange(cb.checked); draw(); };
+  wrap.append(cb, document.createTextNode(labelText));
+  return wrap;
+}
+function axisOptions(idBase, obj) {
+  const row = document.createElement('div'); row.className = 'checks';
+  row.append(checkbox('Log scale', idBase + '-log', obj.log, obj.setLog), checkbox('Grid', idBase + '-grid', obj.grid, obj.setGrid));
+  return row;
+}
+const heading = text => Object.assign(document.createElement('strong'), { textContent: text });
+
+// Color square: sets the curve's line and label color; each click moves to the next color
+function colorSwatch(c, id) {
+  const b = Object.assign(document.createElement('button'), { type: 'button', id, className: 'swatch' });
+  const show = () => { b.style.background = c.color; b.title = `Color: ${COLOR_NAMES[COLORS.indexOf(c.color)]} (click to change)`; b.setAttribute('aria-label', b.title); };
+  b.onclick = e => { e.preventDefault(); c.color = cycle(COLORS, c.color); show(); render(); };
+  show();
+  return b;
+}
+// Style square: symbol + line, symbol only, line only; each click moves to the next
+function styleSwatch(c, id) {
+  const b = Object.assign(document.createElement('button'), { type: 'button', id, className: 'swatch style-sw' });
+  const line = c.style !== 'markers' ? `<line x1="1" y1="6" x2="15" y2="6" stroke="${c.color}" stroke-width="2"/>` : '';
+  const dot = c.style !== 'lines' ? `<circle cx="8" cy="6" r="3" fill="${c.color}"/>` : '';
+  b.innerHTML = `<svg width="12" height="12" viewBox="0 0 16 12" aria-hidden="true">${line}${dot}</svg>`;
+  b.title = `Style: ${STYLE_NAMES[c.style]} (click to change)`; b.setAttribute('aria-label', b.title);
+  b.onclick = e => { e.preventDefault(); c.style = cycle(STYLES, c.style); render(); };
+  return b;
+}
+
+// All figure controls live in the right-hand panel
+function render() {
+  if (!data) return;
+  const st = $('settings'); st.innerHTML = '';
+
+  // Figure and shared x axis
+  const fig = document.createElement('div'); fig.className = 'box';
+  const xs = colSelect(x, v => { x = v; render(); }); xs.id = 'xcol';
+  const xWrap = document.createElement('label'); xWrap.className = 'field';
+  xWrap.append(Object.assign(document.createElement('span'), { textContent: 'x data' }), xs);
+  const sizes = document.createElement('div'); sizes.className = 'pair';
+  sizes.append(field('label\nsize', 'set-titlesize', settings.titleSize, '20', v => settings.titleSize = +v || 20, 'number'),
+               field('number\nsize', 'set-ticksize', settings.tickSize, '20', v => settings.tickSize = +v || 20, 'number'));
+  fig.append(heading('Figure'),
+    field('title', 'set-title', settings.title, 'none', v => settings.title = v),
+    sizes, xWrap,
+    field('x label', 'set-xlabel', settings.xLabel, axisLabel(x), v => settings.xLabel = v),
+    rangeRow('set-x', { min: settings.xMin, max: settings.xMax, set: (k, v) => settings['x' + k] = v }, 'x'),
+    axisOptions('set-x', { log: settings.xLog, grid: settings.xGrid, setLog: v => settings.xLog = v, setGrid: v => settings.xGrid = v }));
+  st.append(fig);
+
+  // One box per subplot: curves, then its y axis
+  panels.forEach((p, pi) => {
+    const el = document.createElement('div'); el.className = 'box';
+    const head = document.createElement('div'); head.className = 'panel-head';
+    head.append(heading(`Subplot ${pi + 1}`));
+    if (panels.length > 1) {
+      const rm = document.createElement('button'); rm.className = 'icon'; rm.textContent = '×'; rm.title = 'Remove subplot';
+      rm.setAttribute('aria-label', `Remove subplot ${pi + 1}`);
+      rm.onclick = () => { panels.splice(pi, 1); render(); };
+      head.append(rm);
+    }
+    el.append(head);
+    p.curves.forEach((c, ci) => {
+      const row = document.createElement('div'); row.className = 'curve';
+      const sw = styleSwatch(c, `style-${pi}-${ci}`);
+      const s = colSelect(c.col, v => { Object.assign(c, { col: v, lx: undefined, ly: undefined }); render(); });
+      s.id = `y-${pi}-${ci}`;
+      const rm = document.createElement('button'); rm.className = 'icon'; rm.textContent = '×'; rm.title = 'Remove curve';
+      rm.setAttribute('aria-label', 'Remove curve');
+      rm.disabled = p.curves.length === 1; rm.style.visibility = p.curves.length === 1 ? 'hidden' : '';
+      rm.onclick = () => { p.curves.splice(ci, 1); render(); };
+      const rl = document.createElement('label'); rl.className = 'rowlabel'; rl.htmlFor = s.id;
+      rl.append(sw, 'y data');
+      row.append(rl, s, rm);
+      const lab = field('label', `set-label-${pi}-${ci}`, c.label, 'none', v => c.label = v);
+      lab.querySelector('span').prepend(colorSwatch(c, `color-${pi}-${ci}`));
+      el.append(row, lab);
+    });
+    const addC = document.createElement('button'); addC.textContent = '+ Add curve';
+    addC.onclick = () => { const last = p.curves[p.curves.length - 1]; p.curves.push(newCurve(last.col, last)); render(); };
+    el.append(addC,
+      field('y label', `set-ylabel-${pi}`, p.yLabel, autoYLabel(p), v => p.yLabel = v),
+      rangeRow(`set-y-${pi}`, { min: p.yMin, max: p.yMax, set: (k, v) => p['y' + k] = v }, 'y'),
+      axisOptions(`set-y-${pi}`, { log: p.yLog, grid: p.yGrid, setLog: v => p.yLog = v, setGrid: v => p.yGrid = v }));
+    st.append(el);
+  });
+  const addP = Object.assign(document.createElement('button'), { className: 'primary', id: 'addPanel', textContent: 'Add subplot' });
+  addP.onclick = () => { panels.push(newPanel(defaultY())); render(); };
+  st.append(addP);
+  draw();
+}
+
+// Default axis labels: the type's short label for the column, else the column name. A subplot uses its first curve.
+const axisLabel = col => (type.labels && type.labels[col]) || (data.calc.find(c => c.name === col) || {}).label || col;
+// "^-1" or "^{-1}" in a label is drawn as a superscript
+const sup = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\^\{([^}]*)\}|\^(-?[0-9.]+|-?[A-Za-z])/g, (m, a, b) => `<sup>${a ?? b}</sup>`);
+const autoYLabel = p => axisLabel(p.curves[0].col);
+function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+
+// Axis range. Linear: blank min and max = autoscale starting from 0.
+// Log: blank = autoscale from the smallest positive value; zero and negative values are skipped.
+// If only one end is set, the other comes from the data.
+function axisRange(vals, min, max, log) {
+  if (log) {
+    if (min === '' && max === '') return { type: 'log', autorange: true };
+    const v = vals.filter(a => a > 0);
+    const lo = min !== '' && +min > 0 ? +min : Math.min(...v) / 1.2, hi = max !== '' && +max > 0 ? +max : Math.max(...v) * 1.2;
+    return { type: 'log', autorange: false, range: [Math.log10(lo), Math.log10(hi)] }; // Plotly log ranges are in log10 units
+  }
+  if (min === '' && max === '') return { type: 'linear', autorange: true, rangemode: 'tozero' };
+  const v = vals.filter(a => a !== null && !isNaN(a));
+  const lo = Math.min(0, ...v), hi = Math.max(...v);
+  return { type: 'linear', autorange: false, range: [min === '' ? lo : +min, max === '' ? hi + 0.05 * (hi - lo) : +max] };
+}
+// Annotation positions on a log axis are given in log10 units; labels are stored in data units
+const toAxis = (v, log) => log ? Math.log10(v) : v;
+const fromAxis = (v, log) => log ? Math.pow(10, v) : v;
+
+let bound = false;
+let labelMap = []; // annotation index -> { curve, xLog, yLog }, so dragged labels keep their place
+function draw() {
+  if (!window.Plotly) { $('err').textContent = 'The plotting library could not load. Check your internet connection and reload.'; $('err').hidden = false; return; }
+  const fg = cssVar('--fg'), panel = cssVar('--panel'), gridColor = cssVar('--plotgrid');
+  const dark = parseInt(panel.slice(1, 3), 16) < 128;
+  const n = panels.length, h = 1 / n; // panels touch, like a stacked publication figure
+  const traces = [], shapes = [], annotations = [];
+  labelMap = [];
+  // Publication style: frame drawn as one rectangle per panel (so shared edges are not doubled),
+  // ticks pointing in, larger labels, optional light grey grid on major ticks only
+  const axis = grid => ({
+    showline: false, showgrid: !!grid, gridcolor: gridColor, gridwidth: 1, zeroline: false,
+    ticks: 'inside', ticklen: 7, tickwidth: 1.5, tickcolor: fg,
+    minor: { ticks: 'inside', ticklen: 4, tickwidth: 1, tickcolor: fg, showgrid: false },
+    tickfont: { size: settings.tickSize }, title: { font: { size: settings.titleSize } }, exponentformat: 'e',
+  }); // fresh object per axis: Plotly edits minor-tick settings in place
+  const layout = {
+    paper_bgcolor: panel, plot_bgcolor: panel,
+    font: { family: 'Arial, Helvetica, sans-serif', color: fg, size: 14 },
+    margin: { l: 96, r: 24, t: settings.title ? 56 : 20, b: 70 },
+    title: { text: sup(settings.title), font: { size: settings.titleSize + 1 }, x: 0.5 },
+    showlegend: false, hovermode: 'closest', shapes, annotations,
+  };
+  panels.forEach((p, pi) => {
+    const k = pi === 0 ? '' : pi + 1;
+    const top = 1 - pi * h, last = pi === n - 1;
+    layout['yaxis' + k] = { ...axis(p.yGrid), domain: [top - h, top], anchor: 'x' + k, mirror: false,
+      ...axisRange(p.curves.flatMap(c => view(c.col)), p.yMin, p.yMax, p.yLog),
+      title: { ...axis().title, text: sup(p.yLabel || autoYLabel(p)) } };
+    // One x axis per panel, all zooming together. Single or top panel: ticks on the bottom edge only.
+    // Other panels: ticks on top and bottom edges. Tick numbers and title only on the bottom panel.
+    layout['xaxis' + k] = { ...axis(settings.xGrid), anchor: 'y' + k, matches: pi === 0 ? undefined : 'x',
+      mirror: pi === 0 ? false : 'ticks', showticklabels: last,
+      ...axisRange(view(x), settings.xMin, settings.xMax, settings.xLog),
+      automargin: true, // needed for standoff, which sets the gap between x numbers and x label
+      title: { ...axis().title, standoff: 10, text: last ? sup(settings.xLabel || axisLabel(x)) : '' } };
+    shapes.push({ type: 'rect', xref: `x${k} domain`, yref: `y${k} domain`, x0: 0, x1: 1, y0: 0, y1: 1,
+      line: { color: fg, width: 1.5 }, layer: 'above' });
+    p.curves.forEach((c, ci) => {
+      const xs = view(x), ys = view(c.col);
+      const col = c.color === COLORS[0] && dark ? fg : c.color; // dark gray would vanish on a dark background
+      traces.push({
+        x: xs, y: ys, xaxis: 'x' + k, yaxis: 'y' + k, name: c.label || c.col,
+        type: 'scattergl', mode: c.style,
+        line: { color: col, width: 1.5 }, marker: { color: col, size: c.style === 'markers' ? 6 : 4 },
+        hovertemplate: `${x}: %{x}<br>${c.col}: %{y}<extra></extra>`,
+      });
+      if (!c.label) return;
+      // Default label spot: a point partway along the curve (spread out for several curves) that the axes can show
+      const ok = j => xs[j] !== null && ys[j] !== null && !(settings.xLog && xs[j] <= 0) && !(p.yLog && ys[j] <= 0);
+      let i = Math.floor(xs.length * (ci + 1) / (p.curves.length + 1));
+      while (i < xs.length && !ok(i)) i++;
+      const lx = c.lx ?? xs[i], ly = c.ly ?? ys[i];
+      if (lx === undefined || (settings.xLog && lx <= 0) || (p.yLog && ly <= 0)) return;
+      annotations.push({ xref: 'x' + k, yref: 'y' + k, x: toAxis(lx, settings.xLog), y: toAxis(ly, p.yLog),
+        xanchor: 'left', yanchor: 'bottom', xshift: 6, yshift: 6,
+        text: sup(c.label), showarrow: false, font: { color: col, size: settings.titleSize - 2 } });
+      labelMap.push({ curve: c, xLog: settings.xLog, yLog: p.yLog });
+    });
+  });
+  $('plot').style.minHeight = Math.max(480, 300 * n) + 'px';
+  Plotly.react('plot', traces, layout, { responsive: true, displaylogo: false, editable: false, edits: { annotationPosition: true } })
+    .then(() => { if (!bound) { bindPlotEvents(); bound = true; } fixMinorTicks(); });
+}
+
+// Minor ticks, also after zooming. Linear axes: one minor tick between neighbouring majors.
+// Log axes with a major tick every decade: 5 minor ticks per decade, evenly spaced in value (e.g. 2.5, 4, 5.5, 7, 8.5).
+function fixMinorTicks() {
+  const fl = $('plot')._fullLayout, upd = {};
+  Object.keys(fl).filter(a => /^[xy]axis\d*$/.test(a)).forEach(a => {
+    const ax = fl[a], d = ax.dtick;
+    if (ax.type === 'log') {
+      if (ax.range[1] - ax.range[0] >= 1) { // spans at least a decade: one major tick per decade
+        if (d !== 1) { upd[a + '.tickmode'] = 'linear'; upd[a + '.dtick'] = 1; upd[a + '.tick0'] = 0; }
+        const vals = [];
+        for (let e = Math.floor(ax.range[0]); e <= Math.ceil(ax.range[1]); e++)
+          for (let j = 1; j <= 5; j++) vals.push(Math.pow(10, e) * (1 + 9 * j / 6));
+        if (ax.minor.tickmode !== 'array' || JSON.stringify(ax.minor.tickvals) !== JSON.stringify(vals)) {
+          upd[a + '.minor.tickmode'] = 'array'; upd[a + '.minor.tickvals'] = vals;
+        }
+      } else { // less than a decade: Plotly's own ticks
+        if (ax.tickmode === 'linear') { upd[a + '.tickmode'] = 'auto'; upd[a + '.dtick'] = null; }
+        if (ax.minor.tickmode === 'array') { upd[a + '.minor.tickmode'] = 'auto'; upd[a + '.minor.tickvals'] = null; }
+      }
+    } else if (typeof d === 'number' && ax.minor.dtick !== d / 2) {
+      upd[a + '.minor.tickmode'] = 'linear'; upd[a + '.minor.dtick'] = d / 2; upd[a + '.minor.tick0'] = ax.tick0;
+    }
+  });
+  if (Object.keys(upd).length) Plotly.relayout('plot', upd);
+}
+
+function bindPlotEvents() {
+  const gd = $('plot');
+  gd.on('plotly_relayout', ev => {
+    // Remember where the user dragged a curve label (stored in data units)
+    Object.keys(ev).forEach(key => {
+      const m = key.match(/^annotations\[(\d+)\]\.([xy])$/), l = m && labelMap[m[1]];
+      if (l) l.curve['l' + m[2]] = fromAxis(ev[key], m[2] === 'x' ? l.xLog : l.yLog);
+    });
+    if (Object.keys(ev).some(key => /range|autorange/.test(key))) fixMinorTicks();
+  });
+}
+
+
+// ---------- CSV export ----------
+let fileName = '';
+// How the CSV is saved, best first:
+// 1. Chrome/Edge opening this file from disk: a Save dialog that opens in the .dat file's folder with the name filled in
+// 2. Published app: the viewer's download permission (the file goes to the browser's Downloads folder)
+// 3. Otherwise: a normal browser download
+let datHandle = null; // the opened .dat file, remembered so the Save dialog can start in its folder
+const canPickFiles = 'showSaveFilePicker' in window && window.self === window.top;
+
+function csvCell(v) { const s = v === null || v === undefined ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
+
+function openExport() {
+  if (!data) return;
+  const box = $('exportCols'); box.innerHTML = '';
+  const main = type.main.filter(c => data.columns.includes(c));
+  const calc = data.calc.map(c => c.name);
+  const other = data.columns.filter(c => !main.includes(c) && !calc.includes(c));
+  const hasValues = c => data.cols[c].some(v => v !== null);
+  const group = (title, cols, checkedFn) => {
+    if (!cols.length) return;
+    box.append(Object.assign(document.createElement('div'), { className: 'group', textContent: title }));
+    cols.forEach(c => {
+      const l = document.createElement('label'), checked = checkedFn(c);
+      const cb = Object.assign(document.createElement('input'), { type: 'checkbox', value: c, checked });
+      cb.dataset.main = checked ? '1' : '';
+      l.append(cb, document.createTextNode(c));
+      box.append(l);
+    });
+  };
+  group('Key columns', main, () => true);
+  group('Calculated columns (filled in once the sample values are entered)', calc, hasValues);
+  group('Other columns', other, () => false);
+  $('exportMsg').hidden = true;
+  const note = $('exportFilterNote');
+  note.hidden = !data.mask;
+  if (data.mask) note.textContent = `Filter on: only the ${data.mask.reduce((a, b) => a + b, 0)} rows that pass it are saved.`;
+  $('exportDlg').showModal();
+}
+const exportBoxes = () => [...$('exportCols').querySelectorAll('input')];
+$('pickMain').onclick = () => exportBoxes().forEach(b => b.checked = !!b.dataset.main);
+$('pickAll').onclick = () => exportBoxes().forEach(b => b.checked = true);
+$('pickNone').onclick = () => exportBoxes().forEach(b => b.checked = false);
+$('exportCancel').onclick = () => $('exportDlg').close();
+$('exportBtn').onclick = openExport;
+
+$('exportForm').onsubmit = async e => {
+  e.preventDefault();
+  const msg = $('exportMsg'); msg.hidden = true;
+  const cols = exportBoxes().filter(b => b.checked).map(b => b.value).sort((a, b) => (b === 'Time (min)') - (a === 'Time (min)')); // time first
+  if (!cols.length) { msg.textContent = 'Pick at least one column.'; msg.hidden = false; return; }
+  const lines = [cols.map(csvCell).join(',')];
+  const valueCols = cols.filter(c => c !== 'Time (min)');
+  for (let i = 0; i < data.nRows; i++) {
+    if (data.mask && !data.mask[i]) continue; // removed by the filter
+    if (valueCols.length && valueCols.every(c => data.cols[c][i] === null)) continue; // skip comment-only rows
+    lines.push(cols.map(c => csvCell(data.cols[c][i])).join(','));
+  }
+  const text = lines.join('\r\n') + '\r\n';
+  const bom = /[^\x00-\x7f]/.test(text) ? '\ufeff' : ''; // lets Excel read symbols like µ correctly
+  const name = fileName.replace(/\s*\(example\)$/, '').replace(/\.[^.]+$/, '') + '.csv';
+  const done = where => { $('exportDlg').close(); $('exportStatus').textContent = where; $('exportStatus').hidden = false; };
+  const fail = text => { msg.textContent = text; msg.hidden = false; };
+  if (canPickFiles) {
+    try {
+      const h = await window.showSaveFilePicker({ suggestedName: name, startIn: datHandle || 'documents',
+        types: [{ description: 'CSV file', accept: { 'text/csv': ['.csv'] } }] });
+      const w = await h.createWritable(); await w.write(bom + text); await w.close();
+      return done(`Saved ${h.name}`);
+    } catch (err) {
+      if (err && err.name === 'AbortError') return; // Save dialog closed
+      // any other failure: fall through to a normal download
+    }
+  }
+  const downloads = window.claude && window.claude.use ? await window.claude.use('downloads').catch(() => null) : null;
+  if (downloads) {
+    try { await downloads.save({ filename: name, data: bom + text }); return done(`Saved ${name} to your Downloads folder`); }
+    catch (err) {
+      if (err && err.code === 'declined') return;
+      return fail(err && err.code === 'rate_limited' ? 'A save prompt is already open. Finish it, then try again.'
+        : 'This view cannot save files. Use the offline copy of the app to export.');
+    }
+  }
+  if (window.claude) return fail('This view cannot save files. Use the offline copy of the app to export.');
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([bom + text], { type: 'text/csv' })), download: name });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  done(`Saved ${name} to your Downloads folder`);
+};
+
+// File picking
+const drop = $('drop'), fileInput = $('file');
+function readFile(f, handle = null) { if (!f) return; datHandle = handle; $('exportStatus').hidden = true; f.arrayBuffer().then(b => loadText(decodeText(b), f.name)); }
+// MultiVu writes some files in Windows-1252 (e.g. "µJ/K" in heat capacity files); use UTF-8 when the file is valid UTF-8
+function decodeText(buf) {
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch (e) { return new TextDecoder('windows-1252').decode(buf); }
+}
+drop.onclick = async () => {
+  if (!('showOpenFilePicker' in window) || window.self !== window.top) return fileInput.click();
+  try { const [h] = await window.showOpenFilePicker(); readFile(await h.getFile(), h); } catch (err) { /* dialog closed */ }
+};
+drop.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } };
+fileInput.onchange = () => readFile(fileInput.files[0]);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = async e => {
+  e.preventDefault(); drop.classList.remove('over');
+  const item = e.dataTransfer.items && e.dataTransfer.items[0], file = e.dataTransfer.files[0];
+  const handle = item && item.getAsFileSystemHandle ? await item.getAsFileSystemHandle().catch(() => null) : null;
+  readFile(file, handle && handle.kind === 'file' ? handle : null);
+};
+
+// Redraw on theme change
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw);
+new MutationObserver(() => data && draw()).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+</script>
+</body>
+</html>
